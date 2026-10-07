@@ -179,7 +179,9 @@ USER_FIX = {
     7: dict(sdate=dt.date(2025, 10, 1), online=dt.date(2025, 10, 1)),   # A4 listed and sold Oct 2025
 }
 STILL_OWNED = {14}                                                      # Giulia: still in stock
-IN_USE = {145, 151}            # Passat + ID.4: Branko's daily drivers, not for sale soon
+IN_USE = {151}                 # ID.4: Branko's daily driver, not for sale soon
+# Passat: company car bought by Branko personally (VAT declared in Sep 2026), paid from his own pocket
+SOLD_TO_PARTNER = {145: dict(sdate=dt.date(2026, 9, 30), sale=7500.0)}
 PRICE_FIX = {151: 13858}       # ID.4: 13,290 + 568 shipping = what Branko paid
 
 VAT_REF_RX = {'2024': re.compile(r'(?<![A-Z])\$?T\$?\d+'),    # VAT column is T on the 2024 tab
@@ -188,6 +190,7 @@ cars, imported_expenses, vat_not_in_profit = [], [], []
 for s in src:
     no = s['no']
     s.update(USER_FIX.get(no, {}))
+    s.update(SOLD_TO_PARTNER.get(no, {}))
     brand, model = split_vehicle(s['vehicle'])
     text = ' '.join(str(x or '') for x in (s['vehicle'], s['engine'], s['gearbox']))
     sold = s['sdate'] is not None
@@ -217,6 +220,9 @@ for s in src:
     if no in USER_FIX:
         issues.append((no, label, 'You said: listed and sold in October 2025. Exact dates, sale price, VAT and buyer are not in the sheet.',
                        'Marked SOLD with sale date 01.10.2025. Fill in the real date, Sale price and VAT — profit appears then.'))
+    elif no in SOLD_TO_PARTNER:
+        issues.append((no, label, f'Bought by Branko personally for {sale:,.0f} € incl. {vat_sale:,.2f} € VAT (paid from his own pocket).',
+                       'Marked SOLD on 30.09.2026, VAT counted in September. His 6,024 € purchase money is added back on the Branko tab.'))
     elif sold:
         if profit is None or sale is None:
             issues.append((no, label, 'Sale date filled, but sale price or profit missing.', 'Imported as SOLD. Please fill in.'))
@@ -241,13 +247,9 @@ for s in src:
         if s['tab'] == '2023' and no not in STILL_OWNED:
             issues.append((no, label, 'Only on the old 2023 tab and no sale date — is it really still in stock?',
                            'Imported as STOCK. Change to SOLD (with date and price) or delete the row.'))
-        if s['vat_amt'] and no == 145:
-            issues.append((no, label, f'Not sold (Branko\'s daily driver), but its VAT ({s["vat_amt"]:,.2f} €) was included in the '
-                                      'September 2026 VAT sum of your old sheet.',
-                           'Not counted here. Check with your accountant whether that VAT was really declared / paid.'))
     if s['pdate'] is None:
         issues.append((no, label, 'Purchase date missing.', 'Left empty — days in stock cannot be calculated.'))
-    if sold and s['online'] is None:
+    if sold and s['online'] is None and no not in SOLD_TO_PARTNER:
         issues.append((no, label, 'Sold, but "Online since" date missing.', 'Left empty — days online cannot be calculated.'))
     if reg is None:
         issues.append((no, label, 'First registration (model year) missing or not a date.', 'Left empty. Fill in from the papers.'))
@@ -718,11 +720,17 @@ br['B20'].font = F_NOTE
 for col, h in zip('BCDE', ['Date', 'Amount (€)  + in / − out', 'Type', 'Note']):
     c = br[f'{col}{LG_FIRST - 1}']
     c.value, c.font, c.fill = h, F_HEAD, FILL_HEAD_IN
-opening = [BRANKO_CUTOFF, BRANKO_OPENING, 'Opening balance',
-           f'Cash not in cars on {BRANKO_CUTOFF:%d.%m.%Y} from the old sheet ("€ NON–DEPLOYED – Branko"): '
-           f'{BRANKO_LEDGER_SUM:,.0f} (running total "Branko vklad vo firme") + 48,000 − 18,500.']
+passat = next(c for c in cars if c['id'] == 145)
+ledger = [
+    [BRANKO_CUTOFF, BRANKO_OPENING, 'Opening balance',
+     f'Cash not in cars on {BRANKO_CUTOFF:%d.%m.%Y} from the old sheet ("€ NON–DEPLOYED – Branko"): '
+     f'{BRANKO_LEDGER_SUM:,.0f} (running total "Branko vklad vo firme") + 48,000 − 18,500.'],
+    [dt.date(2026, 9, 30), passat['price'], 'Correction',
+     f'Car 145 Passat: Branko bought it personally for 7,500 € (paid from his own pocket), so the {passat["price"]:,.0f} € '
+     'of his money that was in the car comes back to his cash. (Sold before the opening date, so not counted automatically.)'],
+]
 for r in range(LG_FIRST, LG_LAST + 1):
-    for col, fmt, v in zip('BCDE', (DATE, EUR2, None, None), opening if r == LG_FIRST else [None] * 4):
+    for col, fmt, v in zip('BCDE', (DATE, EUR2, None, None), ledger[r - LG_FIRST] if r - LG_FIRST < len(ledger) else [None] * 4):
         c = br[f'{col}{r}']
         c.value, c.font, c.border = v, F_BASE, BORDER
         if fmt:
