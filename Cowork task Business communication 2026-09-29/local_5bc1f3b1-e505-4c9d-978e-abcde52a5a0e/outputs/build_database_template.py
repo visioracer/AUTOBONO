@@ -179,6 +179,8 @@ USER_FIX = {
     7: dict(sdate=dt.date(2025, 10, 1), online=dt.date(2025, 10, 1)),   # A4 listed and sold Oct 2025
 }
 STILL_OWNED = {14}                                                      # Giulia: still in stock
+IN_USE = {145, 151}            # Passat + ID.4: Branko's daily drivers, not for sale soon
+PRICE_FIX = {151: 13858}       # ID.4: 13,290 + 568 shipping = what Branko paid
 
 VAT_REF_RX = {'2024': re.compile(r'(?<![A-Z])\$?T\$?\d+'),    # VAT column is T on the 2024 tab
               '2023': re.compile(r'(?<![A-Z])\$?P\$?\d+')}    # and P ("DPH") on the 2023 tab
@@ -200,6 +202,8 @@ for s in src:
         price, extra, cost_f = costs, 0, None
     else:
         price, extra, cost_f = split_costs(costs, s['cost_f'])
+        if no in PRICE_FIX:
+            price, extra = PRICE_FIX[no], round(costs - PRICE_FIX[no], 2)
     vat_in_costs = bool(cost_f and VAT_REF_RX[s['tab']].search(cost_f) and s['vat_amt'] and extra >= s['vat_amt'] - 0.005)
     if vat_in_costs:   # the old cost formula added the car's own VAT ("+T69"); VAT now has its own column
         extra = round(extra - s['vat_amt'], 2)
@@ -238,8 +242,9 @@ for s in src:
             issues.append((no, label, 'Only on the old 2023 tab and no sale date — is it really still in stock?',
                            'Imported as STOCK. Change to SOLD (with date and price) or delete the row.'))
         if s['vat_amt'] and no == 145:
-            issues.append((no, label, f'No sale date, but its VAT ({s["vat_amt"]:,.2f} €) is counted in your September 2026 VAT (AUTOBONO).',
-                           'Kept as STOCK. If it is sold, fill Sale date, Sale price and VAT.'))
+            issues.append((no, label, f'Not sold (Branko\'s daily driver), but its VAT ({s["vat_amt"]:,.2f} €) was included in the '
+                                      'September 2026 VAT sum of your old sheet.',
+                           'Not counted here. Check with your accountant whether that VAT was really declared / paid.'))
     if s['pdate'] is None:
         issues.append((no, label, 'Purchase date missing.', 'Left empty — days in stock cannot be calculated.'))
     if sold and s['online'] is None:
@@ -257,7 +262,7 @@ for s in src:
     if isinstance(src_val, float):
         src_val = str(int(src_val))
     cars.append(dict(
-        id=no, status='SOLD' if sold else 'STOCK', deal='Consignment' if consign else 'Own purchase',
+        id=no, status='SOLD' if sold else ('IN USE' if no in IN_USE else 'STOCK'), deal='Consignment' if consign else 'Own purchase',
         financed=FINANCED.get(no, 'Company'),
         brand=brand, model=model, trim=s['trim'], reg=reg, engine=s['engine'],
         gearbox=(s['gearbox'] or '').split()[0] or None if s['gearbox'] else None,
@@ -295,7 +300,7 @@ def add_list_validation(ws, col, ref, last, strict=True):
 lists = wb.active
 lists.title = 'Lists'
 LISTS = {
-    'Status': ['STOCK', 'RESERVED', 'SOLD'],
+    'Status': ['STOCK', 'RESERVED', 'SOLD', 'IN USE'],
     'Deal type': ['Own purchase', 'Consignment'],
     'Brand': sorted({c['brand'] for c in cars} | {'BMW', 'Ford', 'Toyota', 'Cupra', 'Hyundai', 'Kia'}),
     'Gearbox': sorted({c['gearbox'] for c in cars if c['gearbox']}),
@@ -444,8 +449,10 @@ ws.conditional_formatting.add(f'{st}{FIRST}:{st}{LAST}',
                               FormulaRule(formula=[f'{st}{FIRST}="STOCK"'], fill=PatternFill('solid', fgColor='E2EFDA')))
 ws.conditional_formatting.add(f'{st}{FIRST}:{st}{LAST}',
                               FormulaRule(formula=[f'{st}{FIRST}="RESERVED"'], fill=FILL_YELLOW))
+ws.conditional_formatting.add(f'{st}{FIRST}:{st}{LAST}',
+                              FormulaRule(formula=[f'{st}{FIRST}="IN USE"'], fill=PatternFill('solid', fgColor='DDEBF7')))
 ws.conditional_formatting.add(f'{L["days"]}{FIRST}:{L["days"]}{LAST}',
-                              FormulaRule(formula=[f'AND(${st}{FIRST}<>"SOLD",N({L["days"]}{FIRST})>90)'],
+                              FormulaRule(formula=[f'AND(${st}{FIRST}<>"SOLD",${st}{FIRST}<>"IN USE",N({L["days"]}{FIRST})>90)'],
                                           fill=PatternFill('solid', fgColor='F8CBAD')))
 ws.conditional_formatting.add(f'{L["profit"]}{FIRST}:{L["profit"]}{LAST}',
                               FormulaRule(formula=[f'AND({L["profit"]}{FIRST}<>"",{L["profit"]}{FIRST}<0)'], font=Font(color='C00000')))
@@ -505,11 +512,12 @@ now_rows = [
     ('Cars in stock', f'=COUNTIF({C("status")},"STOCK")', '0'),
     ('Cars reserved', f'=COUNTIF({C("status")},"RESERVED")', '0'),
     ('Money tied up in stock (total cost, own purchases)',
-     f'=SUMIFS({C("total")},{C("status")},"<>SOLD",{C("deal")},"Own purchase",{C("id")},"<>")', EUR),
-    ('Stock cars not yet online', f'=COUNTIFS({C("status")},"<>SOLD",{C("id")},"<>",{C("online")},"")', '0'),
-    ('Stock cars older than 90 days', f'=COUNTIFS({C("status")},"<>SOLD",{C("id")},"<>",{C("days")},">90")', '0'),
+     f'=SUMIFS({C("total")},{C("status")},"<>SOLD",{C("status")},"<>IN USE",{C("deal")},"Own purchase",{C("id")},"<>")', EUR),
+    ('Cars in private use (IN USE, e.g. Branko\'s daily drivers)', f'=COUNTIF({C("status")},"IN USE")', '0'),
+    ('Stock cars not yet online', f'=COUNTIFS({C("status")},"<>SOLD",{C("status")},"<>IN USE",{C("id")},"<>",{C("online")},"")', '0'),
+    ('Stock cars older than 90 days', f'=COUNTIFS({C("status")},"<>SOLD",{C("status")},"<>IN USE",{C("id")},"<>",{C("days")},">90")', '0'),
     ('Average days in stock (cars not yet sold)',
-     f'=IFERROR(AVERAGEIFS({C("days")},{C("status")},"<>SOLD",{C("id")},"<>"),"")', '0'),
+     f'=IFERROR(AVERAGEIFS({C("days")},{C("status")},"<>SOLD",{C("status")},"<>IN USE",{C("id")},"<>"),"")', '0'),
     ('Branko — cash on the common account (not in cars)', "='Branko'!C11", EUR),
     ('Branko — total in the company (cash + his cars)', "='Branko'!C13", EUR),
     ('VAT this month — AUTOBONO', '=Monthly!C9', EUR2),
@@ -568,7 +576,7 @@ for b in brand_order + sorted({c['brand'] for c in cars} - set(brand_order)):
     sm.cell(row=row, column=2, value=b).font = F_BASE
     vals = [(f'=COUNTIFS({crit})', '0'), (f'=SUMIFS({C("profit")},{crit})', EUR),
             (f'=IF(C{row}=0,"",D{row}/C{row})', EUR), (f'=IFERROR(AVERAGEIFS({C("days")},{crit}),"")', '0'),
-            (f'=COUNTIFS({C("status")},"<>SOLD",{C("brand")},B{row})', '0')]
+            (f'=COUNTIFS({C("status")},"<>SOLD",{C("status")},"<>IN USE",{C("brand")},B{row})', '0')]
     for i, (fml, fmt) in enumerate(vals):
         c = sm.cell(row=row, column=3 + i, value=fml)
         c.font, c.number_format = F_CALC, fmt
@@ -691,7 +699,7 @@ calc = [
     (11, 'Cash on the common account that is Branko\'s', '=SUM(C6:C9)'),
     (12, 'Money in his cars now (purchase price of unsold cars)', f'=SUMIFS({C("price")},{bran},{C("status")},"<>SOLD")'),
     (13, 'BRANKO — TOTAL IN THE COMPANY', '=C11+C12'),
-    (15, 'His cars in stock now', f'=COUNTIFS({bran},{C("status")},"<>SOLD")'),
+    (15, 'His cars not sold yet (stock + daily drivers)', f'=COUNTIFS({bran},{C("status")},"<>SOLD")'),
     (16, 'His profit share — all time', f'=SUMIFS({C("partner")},{bran},{C("status")},"SOLD")'),
     (17, 'His profit share — this year',
      f'=SUMIFS({C("partner")},{bran},{C("status")},"SOLD",{C("sdate")},">="&DATE(YEAR(TODAY()),1,1))'),
@@ -727,10 +735,11 @@ dv = DataValidation(type='date', operator='greaterThan', formula1='DATE(2020,1,1
 dv.add(f'B{LG_FIRST}:B{LG_LAST}')
 br.add_data_validation(dv)
 branko_stock = [c for c in cars if c['financed'] == 'Branko' and c['status'] != 'SOLD']
-br['E5'] = ('Please check: cars marked as Branko\'s and still in stock: '
-            + ', '.join(f'{c["id"]} {c["brand"]} {c["model"]}' for c in branko_stock)
-            + '. Car 151: his ledger took 13,858 € but Purchase price is 13,290 € (+568 € on Expenses) — add a Correction '
-              'line of +568 € when it sells if he paid that too. Car 156: ledger 19,570 €, Purchase price 19,580 €.')
+br['E5'] = ('His unsold cars: '
+            + ', '.join(f'{c["id"]} {c["brand"]} {c["model"]}{" (IN USE)" if c["status"] == "IN USE" else ""}'
+                        for c in branko_stock)
+            + '. Daily drivers (IN USE) stay in "Money in his cars" until they are sold. '
+              'Check: car 156 — his ledger took 19,570 €, Purchase price on Cars is 19,580 €.')
 br['E5'].font = F_NOTE
 br['E5'].alignment = Alignment(wrap_text=True, vertical='top')
 br.merge_cells('E5:E17')
@@ -778,13 +787,15 @@ lines = [
      '(the price for the car only).', F_BASE),
     ('• Car goes online: fill "Online since". Prep days and days online are then counted automatically.', F_BASE),
     ('• Car bought with Branko\'s money: "Financed by" = Branko. Otherwise Company (or Samko).', F_BASE),
+    ('• Car kept for private use (e.g. Branko\'s daily driver): Status = IN USE. It is left out of the stock numbers '
+     '(stock count, money tied up, 90-day warning) but still counts as his money in cars.', F_BASE),
     ('• Car sold: Status = SOLD, fill Sale date, Sale price, Sold via (AUTOBONO / visioracer), "VAT on sale" and Buyer. '
      'Profit appears automatically. Fill the investor / partner share.', F_BASE),
     ('• STK: fill "STK date" and set "STK fee" to "To pay"; switch to "Paid" once the 350 € is paid. The Monthly tab counts them.', F_BASE),
     ('• Consignment / commission car: Deal type = Consignment, put your fee in "Commission". Profit = commission − costs.', F_BASE),
     ('• Every extra cost (transport, repair, STK, ads…) is a line on the Expenses tab with the Car ID — no more long "=9020+410+40" '
      'formulas in one cell; you will see what each number was.', F_BASE),
-    ('• Colours: green status = in stock, yellow = reserved, grey row = sold, red "Days in stock" = unsold over 90 days, '
+    ('• Colours: green status = in stock, yellow = reserved, blue = in use, grey row = sold, red "Days in stock" = unsold over 90 days, '
      'yellow cell = missing purchase date, first registration or VIN.', F_BASE),
     ('', None),
     ('WHAT CHANGED COMPARED TO THE OLD SHEET', F_H2),
