@@ -3,7 +3,11 @@
 Everything is counted from the sale dates on the "2024" tab (rows 5–178, cars No. 10 onward), from
 January 2024 — the 2023 tab (a few early cars) is left out on purpose.
 
-Run:  python3 add_statistics.py AUTOBONO.xlsx OUT.xlsx
+The output holds ONLY the Statistics tab (plus an empty "2024" placeholder so the formulas keep their
+references). The user copies the tab into their live Google Sheet ("Copy to → Existing spreadsheet"), so
+their own sheet — notes, comments, colours — is never re-saved by this script.
+
+Run:  python3 add_statistics.py OUT.xlsx
 """
 import datetime as dt
 import sys
@@ -12,9 +16,13 @@ import openpyxl
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-IN, OUT = sys.argv[1:3]
-wb = openpyxl.load_workbook(IN)
-ws = wb.create_sheet('Statistics', 0)
+OUT = sys.argv[1]
+wb = openpyxl.Workbook()
+ws = wb.active
+ws.title = 'Statistics'
+placeholder = wb.create_sheet('2024')
+placeholder['A1'] = ('Empty placeholder. Copy the Statistics tab into your AUTOBONO sheet '
+                     '(right-click the tab → Copy to → Existing spreadsheet); there it reads your real 2024 tab.')
 
 # source ranges
 A = lambda col: f"'2024'!${col}$5:${col}$178"     # noqa: E731  cars No. 10 onward
