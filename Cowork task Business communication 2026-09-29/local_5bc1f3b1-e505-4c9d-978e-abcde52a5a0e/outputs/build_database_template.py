@@ -93,6 +93,16 @@ def to_date(v):
     return v.date() if isinstance(v, dt.datetime) else None
 
 
+def paint(cell):
+    """Fill + text colour of the old Vehicle cell (the car's paint colour), as RGB hex, or None."""
+    fg = cell.fill.fgColor
+    if cell.fill.fill_type != 'solid' or fg.type != 'rgb' or not fg.rgb:
+        return None
+    fc = cell.font.color
+    font_rgb = fc.rgb if fc is not None and fc.type == 'rgb' and fc.rgb else 'FF000000'
+    return fg.rgb[-6:], font_rgb[-6:]
+
+
 def cost_formula(sheet, col, row, depth=0):
     """Follow '=R190'-style links and return the formula that itemises the costs (or None)."""
     f = fml_wb[sheet][f'{col}{row}'].value
@@ -134,7 +144,7 @@ for r in range(5, wsv.max_row + 1):
         flag=clean(g('N')), source=clean(g('O')), score=num(g('P')), vat=clean(g('Q')), costs=num(g('R')),
         vat_amt=num(g('T')), sale=num(g('V')), profit=num(g('X')), partner=num(g('Z')),
         pdate=to_date(g('AD')), online=to_date(g('AF')), sdate=to_date(g('AG')),
-        cost_f=cost_formula('2024', 'R', r), tab='2024'))
+        cost_f=cost_formula('2024', 'R', r), paint=paint(ws.cell(r, 4)), tab='2024'))
 in_2024 = {c['no'] for c in src}
 
 # "2023" tab (Slovak headers): only cars not already continued on the 2024 tab.
@@ -150,7 +160,7 @@ for r in range(4, wsv.max_row + 1):
         km=num(g('H')), vin=clean(g('I')), reg_status=None, todo=None, buyer=clean(g('J')), flag=clean(g('K')),
         source=clean(g('L')), score=None, vat=clean(g('M')), costs=num(g('N')), vat_amt=num(g('P')),
         sale=num(g('R')), profit=num(g('S')), partner=num(g('T')), pdate=None, online=to_date(g('U')),
-        sdate=to_date(g('V')), cost_f=cost_formula('2023', 'N', r), tab='2023'))
+        sdate=to_date(g('V')), cost_f=cost_formula('2023', 'N', r), paint=paint(fml_wb['2023'].cell(r, 3)), tab='2023'))
 src.sort(key=lambda c: c['no'])
 
 # ---- facts taken from the side calculations of the old "2024" tab
@@ -275,7 +285,7 @@ for s in src:
         asking=sale if not sold and sale else None, sdate=s['sdate'], sale=sale if sold else None,
         sold_via=SOLD_VIA.get(no, 'AUTOBONO') if sold else None, vat_sale=vat_sale, adjust=adjust,
         commission=commission, buyer=s['buyer'] if sold else None,
-        partner=s['partner'] if sold and no not in USER_FIX else None, notes=None))
+        partner=s['partner'] if sold and no not in USER_FIX else None, notes=None, paint=s['paint']))
 
 # ---------------------------------------------------------------- workbook
 wb = openpyxl.Workbook()
@@ -376,6 +386,7 @@ COLS = [  # key, header, width, kind ('in' typed / 'calc' formula), number forma
     ('notes', 'Notes', 40, 'in', None),
 ]
 L = {k: get_column_letter(i) for i, (k, *_r) in enumerate(COLS, 1)}
+COL_IDX = {k: i for i, (k, *_r) in enumerate(COLS, 1)}
 calc_idx = {i for i, c in enumerate(COLS, 1) if c[3] == 'calc'}
 style_header(ws, [c[1] for c in COLS], calc_idx)
 for i, (_k, _h, w, _kind, _f) in enumerate(COLS, 1):
@@ -412,6 +423,10 @@ for ri in range(FIRST, LAST + 1):
             if car is not None:
                 cell.value = car[k]
             cell.font = F_BASE
+            if k == 'model' and car is not None and car['paint']:
+                bg, fg = car['paint']
+                cell.fill = PatternFill('solid', fgColor=bg)
+                cell.font = Font(name=FONT, size=10, color=fg)
         if fmt:
             cell.number_format = fmt
         cell.border = BORDER
@@ -445,7 +460,9 @@ dv.add(f'A{FIRST}:A{LAST}')
 ws.add_data_validation(dv)
 
 st = L['status']
-ws.conditional_formatting.add(f'A{FIRST}:{L["notes"]}{LAST}',
+# sold rows go grey — except the Model cell, which keeps the car's paint colour
+ws.conditional_formatting.add(f'A{FIRST}:{get_column_letter(COL_IDX["model"] - 1)}{LAST} '
+                              f'{get_column_letter(COL_IDX["model"] + 1)}{FIRST}:{L["notes"]}{LAST}',
                               FormulaRule(formula=[f'${st}{FIRST}="SOLD"'], font=Font(color='808080')))
 ws.conditional_formatting.add(f'{st}{FIRST}:{st}{LAST}',
                               FormulaRule(formula=[f'{st}{FIRST}="STOCK"'], fill=PatternFill('solid', fgColor='E2EFDA')))
@@ -803,6 +820,7 @@ lines = [
     ('• Consignment / commission car: Deal type = Consignment, put your fee in "Commission". Profit = commission − costs.', F_BASE),
     ('• Every extra cost (transport, repair, STK, ads…) is a line on the Expenses tab with the Car ID — no more long "=9020+410+40" '
      'formulas in one cell; you will see what each number was.', F_BASE),
+    ('• Model cell = the car\'s paint colour, as in your old sheet. For a new car: select the Model cell → Fill colour.', F_BASE),
     ('• Colours: green status = in stock, yellow = reserved, blue = in use, grey row = sold, red "Days in stock" = unsold over 90 days, '
      'yellow cell = missing purchase date, first registration or VIN.', F_BASE),
     ('', None),
